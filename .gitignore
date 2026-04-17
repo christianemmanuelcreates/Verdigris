@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+vault_template/.DS_Store
+*.db
+*.sqlite
+.demo_seed_progress.json
