@@ -27,9 +27,31 @@ The 100th market analysis is dramatically more valuable than the first — becau
 
 ## Demo
 
-> 📸 *Add screenshot of the Verdigris UI here*
+### Main interface
+![Verdigris home screen — sidebar with quick analyses, 
+vault search, and 39 reports in knowledge base](docs/ui-home.png)
 
-> 🎥 *Add Loom video link here*
+### Live thinking states — ZIP code analysis
+![Live pipeline showing ZIP resolution, NASA irradiance fetch, 
+EIA rates, PVWatts simulation, and Census 
+demographics](docs/thinking_state_Analysis_and_reports.png)
+
+### Market intelligence dashboard — Top 10 opportunity ranking
+![Texas market intelligence: viability score, rate, payback, 
+solar resource metrics — Top 10 markets by deployment 
+opportunity](docs/Top_ten_markets_from_stored_database.png)
+
+### K-Means clustering — Rate vs Irradiance by cluster
+![K-Means scatter plot: 26 markets across 5 clusters, 
+R²=0.78, showing rate vs irradiance 
+distribution](docs/kmeans_scatter_plot.png)
+
+### Plain-English model explanations for non-technical users
+![K-Means clustering output for Texas with similar markets 
+table and deployment insight in plain 
+English](docs/LLM_explanation_for_non_technical_reps.png)
+
+> 🎥 *Loom walkthrough coming soon*
 
 ---
 

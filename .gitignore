@@ -8,3 +8,7 @@ vault_template/.DS_Store
 *.db
 *.sqlite
 .demo_seed_progress.json
+SPRINT_GUIDE.md
+UI_DESIGN_BRIEF.md
+PROJECT_REQUIREMENTS.md
+*.code-workspace
