@@ -36,24 +36,20 @@ st.set_page_config(
 st.markdown("""
 <style>
 /* ── Sidebar toggle — always visible, high contrast ── */
-[data-testid="collapsedControl"] {
-    display: block !important;
-    visibility: visible !important;
-    position: fixed !important;
-    top: 50% !important;
-    left: 0 !important;
-    z-index: 999 !important;
-}
-[data-testid="collapsedControl"] button {
+[data-testid="stExpandSidebarButton"] {
     background: #4ECDC4 !important;
     border: 2px solid #C9A96E !important;
-    color: #0A1F15 !important;
-    border-radius: 0 8px 8px 0 !important;
-    width: 24px !important;
-    min-height: 48px !important;
-    padding: 0 !important;
+    border-radius: 0 6px 6px 0 !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    width: 28px !important;
+    min-height: 40px !important;
 }
-[data-testid="collapsedControl"] button:hover {
+[data-testid="stExpandSidebarButton"] svg {
+    fill: #0A1F15 !important;
+    color: #0A1F15 !important;
+}
+[data-testid="stExpandSidebarButton"]:hover {
     background: #C9A96E !important;
     border-color: #4ECDC4 !important;
 }
@@ -148,20 +144,6 @@ section[data-testid="stSidebar"] {
     background: #0A1F15 !important;
 }
 
-[data-testid="stExpandSidebarButton"],
-[data-testid="stBaseButton-header"] {
-    background: #4ECDC4 !important;
-    border: 2px solid #C9A96E !important;
-    color: #0A1F15 !important;
-    opacity: 1 !important;
-    visibility: visible !important;
-}
-[data-testid="stExpandSidebarButton"] svg,
-[data-testid="stBaseButton-header"] svg {
-    fill: #0A1F15 !important;
-    color: #0A1F15 !important;
-}
-
 /* ── Hide Streamlit branding ── */
 #MainMenu, footer, header { visibility: hidden; }
 </style>
@@ -173,6 +155,7 @@ def init_state():
     defaults = {
         "messages":        [],
         "mode":            "home",          # home | report_intake | chat
+        "show_help":       False,
         "intake_step":     "",              # tracks sub-steps within intake
         "last_input":      "",              # prevents double-processing
         "report_location": "",
@@ -261,6 +244,7 @@ def render_sidebar():
     vault_count = get_vault_stats()
 
     with st.sidebar:
+        count = st.session_state.get("_vault_count") or get_vault_stats()
         st.markdown(
             f"<div style='font-family:monospace;font-size:11px;"
             f"color:#4ECDC4;letter-spacing:.12em;margin-bottom:4px;'>"
@@ -270,7 +254,7 @@ def render_sidebar():
         st.markdown(
             f"<div style='font-family:monospace;font-size:10px;"
             f"color:#C9A96E;opacity:.6;margin-bottom:16px;'>"
-            f"{vault_count} reports in vault</div>",
+            f"{count} reports in vault</div>",
             unsafe_allow_html=True
         )
 
@@ -427,6 +411,30 @@ def render_sidebar():
                 st.session_state.selected_report = r
                 st.rerun()
 
+        st.markdown("<hr style='border-color:#2D5A5A;margin:16px 0 8px;'>",
+                    unsafe_allow_html=True)
+        st.markdown(
+            "<div style='font-family:monospace;font-size:10px;"
+            "letter-spacing:.12em;color:#4ECDC4;opacity:.7;"
+            "margin-bottom:8px;'>QUICK REFERENCE</div>",
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            """<div style='font-family:monospace;font-size:11px;
+            color:#C9A96E;line-height:1.8;'>
+            ☀️ Solar Viability — any location<br>
+            ⚡ Rate &amp; ROI — any location<br>
+            📈 Demand Forecast — U.S. states only<br>
+            📄 Executive Summary — any location<br>
+            <br>
+            💬 Type a ZIP for instant report<br>
+            🔍 Ask anything — vault answers free<br>
+            <br>
+            Press <b>[</b> to open sidebar
+            </div>""",
+            unsafe_allow_html=True
+        )
+
 
 # ── Message helpers ───────────────────────────────────────────────────────────
 
@@ -551,10 +559,14 @@ def run_full_report(location: str, report_type: str):
         st.write(f"🤖 Analyst reasoning ({report_type.replace('_',' ')})...")
         findings = run(location, report_type)
         if "error" in findings:
+            st.session_state._last_error = findings["error"]
             status.update(
-                label=f"Analysis failed: {findings['error'][:60]}",
-                state="error"
+                label="Analysis failed",
+                state="error",
+                expanded=False
             )
+            st.error(findings["error"])
+            LOGGER.error("Report failed: %s", findings["error"])
             return None
         st.write(f"   → {len(findings.get('findings',[]))} findings produced")
 
@@ -587,7 +599,7 @@ def render_home():
     """Opening message with three action buttons."""
     if not st.session_state.messages:
         LOGGER.info("RENDER ── mode: %s", st.session_state.mode)
-        vault_count = get_vault_stats()
+        vault_count = st.session_state.get("_vault_count", 0)
         _add_message("assistant",
             f"Hello. I'm **Verdigris** — an energy intelligence platform "
             f"built on public data from NASA, EIA, Eurostat, and World Bank.\n\n"
@@ -599,7 +611,7 @@ def render_home():
 
     # Three action buttons
     if st.session_state.mode == "home":
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3 = st.columns([2, 2, 1.5])
         with col1:
             if st.button("📋  Run a report", use_container_width=True):
                 _add_message("assistant",
@@ -621,7 +633,7 @@ def render_home():
                 st.session_state.mode = "chat"
                 st.rerun()
         with col3:
-            if st.button("🔬  Run analysis", use_container_width=True):
+            if st.button("🔬  Analyse", use_container_width=True):
                 _add_message("assistant",
                     "Which analysis would you like to run?\n\n"
                     "Use the **Quick Analyses** buttons in the sidebar, or "
@@ -669,6 +681,15 @@ def render_report_intake():
                 st.session_state.report_type = "demand_forecast"
                 st.session_state.mode = "report_running"
                 _add_message("user", "Energy Demand Forecast")
+                _add_message("assistant",
+                    "Running demand forecast. Note: this report type "
+                    "uses Prophet time series modeling on EIA historical "
+                    "consumption data and is available for U.S. states only. "
+                    "For cities or ZIP codes, Verdigris will automatically "
+                    "use the parent state. International locations are not "
+                    "supported for demand forecasting.",
+                    badge="analysis"
+                )
                 st.rerun()
         with col2:
             if st.button("🌍  Market Comparison", use_container_width=True):
@@ -695,10 +716,12 @@ def render_report_intake():
             )
             st.session_state.current_report = report_md
         else:
-            _add_message("assistant",
-                "Report generation failed. Check your API keys and try again.",
-                badge="report"
+            error_msg = st.session_state.get(
+                "_last_error",
+                "Report generation failed. Check your API keys and try again."
             )
+            _add_message("assistant", error_msg, badge="report")
+            st.session_state._last_error = ""
 
         st.session_state.mode = "chat"
         st.rerun()
@@ -902,15 +925,6 @@ def render_chat():
         st.session_state.selected_report = None
         st.rerun()
 
-    # Download button for current report
-    if st.session_state.current_report:
-        st.download_button(
-            label="📥 Download last report (.md)",
-            data=st.session_state.current_report,
-            file_name=f"verdigris_{date.today().isoformat()}.md",
-            mime="text/markdown",
-        )
-
     # Chat input
     user_input = st.chat_input("Ask anything, or enter a ZIP code...")
     if user_input and user_input != st.session_state.get("last_input", ""):
@@ -994,12 +1008,6 @@ def render_report_viewer():
             st.session_state.selected_report = None
             st.rerun()
 
-    st.download_button(
-        "📥 Download (.md)",
-        data=r["content"],
-        file_name=r["filename"],
-        mime="text/markdown",
-    )
     st.markdown("---")
     st.markdown(r["content"])
 
@@ -1134,83 +1142,57 @@ def _render_market_intel_dashboard():
 
         st.markdown(result["markdown_report"])
 
-    # Download
-    st.download_button(
-        "📥 Download analysis (.md)",
-        data=result["markdown_report"],
-        file_name=f"verdigris_intel_{target.get('name','market').lower().replace(' ','_')}.md",
-        mime="text/markdown",
-    )
-
-
 # ── Main router ───────────────────────────────────────────────────────────────
 
 def main():
+    vault_count = get_vault_stats()
+    st.session_state._vault_count = vault_count
+
     # Sidebar toggle — fixed position, always visible
     st.markdown(
         """<style>
-        div[data-testid="stHorizontalBlock"] 
-            button[kind="secondary"]:has(p:contains("☰")) {
-            position: fixed;
-            left: 12px;
-            top: 12px;
-            z-index: 9999;
-            background: #4ECDC4 !important;
-            color: #0A1F15 !important;
-            border: 2px solid #C9A96E !important;
-            border-radius: 6px !important;
-            font-size: 18px !important;
-            width: 40px !important;
-            height: 40px !important;
-            padding: 0 !important;
-        }
         </style>""",
         unsafe_allow_html=True
     )
 
     # Header
-    col_title, col_badge, col_toggle = st.columns([5, 1, 0.5])
-    with col_toggle:
-        # Inject JS to click Streamlit's native sidebar toggle
-        # data-testid confirmed as stExpandSidebarButton 
-        # via DevTools on Streamlit 1.56
-        st.markdown(
-            """<script>
-            window.toggleSidebar = function() {
-                const btn = document.querySelector(
-                    '[data-testid="stExpandSidebarButton"]'
-                );
-                if (btn) btn.click();
-            }
-            </script>""",
-            unsafe_allow_html=True
-        )
-        if st.button("☰", help="Toggle sidebar",
-                     key="sidebar_toggle"):
-            st.markdown(
-                "<script>window.toggleSidebar();</script>",
-                unsafe_allow_html=True
-            )
+    col_title, col_badge, col_toggle, col_help = st.columns([6, 1.2, 0.4, 0.4])
     with col_title:
         st.markdown(
-            "<h1 style='font-family:monospace;font-size:22px;"
-            "color:#4ECDC4;letter-spacing:.08em;margin-bottom:0;'>"
+            "<div style='padding:4px 0 8px 0;'>"
+            "<h1 style='font-family:monospace;font-size:24px;"
+            "color:#4ECDC4;letter-spacing:.1em;margin-bottom:2px;"
+            "font-weight:bold;'>"
             "VERDIGRIS</h1>"
-            "<p style='font-family:monospace;font-size:12px;"
-            "color:#C9A96E;opacity:.7;margin-top:2px;letter-spacing:.05em;'>"
-            "Energy Intelligence Platform · Viridian Society</p>",
+            "<p style='font-family:monospace;font-size:11px;"
+            "color:#C9A96E;opacity:.6;margin-top:0;"
+            "letter-spacing:.08em;'>"
+            "ENERGY INTELLIGENCE PLATFORM · VIRIDIAN SOCIETY"
+            "</p></div>",
             unsafe_allow_html=True
         )
     with col_badge:
-        count = get_vault_stats()
+        count = vault_count
         st.markdown(
             f"<div style='font-family:monospace;font-size:11px;"
             f"color:#4ECDC4;border:1px solid #2D5A5A;"
-            f"padding:4px 12px;border-radius:20px;"
-            f"text-align:center;margin-top:8px;'>"
+            f"padding:6px 12px;border-radius:20px;"
+            f"text-align:center;margin-top:12px;"
+            f"white-space:nowrap;'>"
             f"{count} vault reports</div>",
             unsafe_allow_html=True
         )
+    with col_toggle:
+        if st.button("☰", key="sidebar_toggle",
+                     help="Press [ to toggle sidebar"):
+            if "sidebar_open" not in st.session_state:
+                st.session_state.sidebar_open = True
+            st.session_state.sidebar_open = not st.session_state.sidebar_open
+    with col_help:
+        if st.button("?", help="User manual", key="help_toggle"):
+            st.session_state.show_help = not st.session_state.get(
+                "show_help", False
+            )
 
     render_sidebar()
 
@@ -1221,6 +1203,105 @@ def main():
 
     st.markdown("<hr style='border-color:#2D5A5A;margin:8px 0 16px;'>",
                 unsafe_allow_html=True)
+
+    if st.session_state.get("show_help", False):
+        st.markdown(
+            "<div style='font-family:monospace;font-size:11px;"
+            "letter-spacing:.12em;color:#4ECDC4;margin-bottom:12px;'>"
+            "USER MANUAL</div>",
+            unsafe_allow_html=True
+        )
+
+        col_a, col_b = st.columns(2)
+
+
+        with col_a:
+            st.markdown("""
+**Report Types**
+
+☀️ **Solar Viability**
+Scores a market 0-100 using irradiance, electricity
+rate, and population density. Full written report
+saved to the knowledge base permanently.
+Works for: U.S. states, ZIP codes, and countries.
+
+⚡ **Rate & ROI**
+Analyzes electricity rate environment and estimates
+payback period for a standard 4kW solar system.
+Works for: U.S. states and countries.
+
+📈 **Demand Forecast**
+Prophet time series model forecasting electricity
+consumption using EIA historical warehouse data.
+U.S. states only. Cities, ZIP codes, and
+international locations are not supported.
+
+📄 **Executive Summary**
+One-page stakeholder brief. Maximum 400 words.
+Works for: U.S. states and countries.
+
+🌍 **Market Comparison**
+Side-by-side comparison of markets already in
+the vault. Use exact names from vault reports.
+""")
+
+        with col_b:
+            st.markdown("""
+**Supported Locations**
+
+| Type | Example | Notes |
+|------|---------|-------|
+| U.S. state | California, TX | All report types |
+| ZIP code | 90210, 77002 | Solar Viability only |
+| Country | Germany, Japan | Solar, Rate, Executive |
+| City | Not recommended | Use state name instead |
+
+**How the Chat Works**
+
+🔍 **Vault recall** (free, instant)
+Answers from existing reports. No API calls.
+Try: "Which states have the strongest solar economics?"
+
+⚡ **Inline analysis** (free, vault data only)
+Keywords: payback, rank, scenario, cluster,
+sensitivity, forecast, similar markets.
+Try: "What is the payback period for Hawaii?"
+
+📋 **Full report** (~$0.04 per report)
+Keywords: run a report, solar viability,
+demand forecast, rate roi, executive summary.
+Try: "Run a solar viability report for Oregon"
+
+🔄 **ZIP auto-detection**
+Type any valid 5-digit U.S. ZIP code to run
+an automatic solar viability report.
+Try: "77002"
+
+**Quick Analyses (sidebar)**
+
+📈 Payback calculator — vault location required
+🎯 Rate sensitivity — vault location required
+🏆 Market ranking — no input needed
+🔬 Market intelligence — vault location required
+
+**Cost per action**
+
+| Action | Cost |
+|--------|------|
+| Vault recall | Free |
+| Inline analysis | Free |
+| Market intelligence | Free |
+| Full report | ~$0.04 |
+
+**Data sources used**
+NASA POWER · EIA · NREL PVWatts
+U.S. Census · Eurostat · World Bank · Ember Climate
+""")
+
+        st.markdown(
+            "<hr style='border-color:#2D5A5A;margin:8px 0 16px;'>",
+            unsafe_allow_html=True
+        )
 
     mode = st.session_state.mode
 
