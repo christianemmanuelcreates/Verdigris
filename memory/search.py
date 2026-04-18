@@ -312,46 +312,71 @@ def _analysis_payback(question: str) -> str:
             "The report may be missing PVWatts data."
         )
 
-    # Standard 4kW system cost assumption
-    system_cost = 12_000
-    itc_credit = system_cost * 0.30  # 30% ITC
-    net_cost = system_cost - itc_credit
+    # System size comparison — 4kW, 8kW, 12kW
+    COST_PER_KW = 3_000   # $3,000/kW installed
+    ITC_RATE    = 0.30    # 30% federal ITC
+    DEGRADATION = 0.005   # 0.5%/year
 
-    annual_savings = annual_kwh * (rate / 100)
-    simple_payback = net_cost / annual_savings if annual_savings > 0 else None
-    ten_yr_savings = annual_savings * 10
-    ten_yr_roi = ((ten_yr_savings - net_cost) / net_cost) * 100
+    system_sizes = [
+        {"kw": 4,  "label": "4 kW (small residential)"},
+        {"kw": 8,  "label": "8 kW (standard residential)"},
+        {"kw": 12, "label": "12 kW (large residential)"},
+    ]
 
     lines = [
         f"## Payback & ROI Analysis — {location_name}",
-        f"*Source: vault report data + standard 4kW system assumptions*\n",
-        f"| Metric | Value |",
-        f"|--------|-------|",
-        f"| System size | 4 kW |",
-        f"| Gross system cost | $12,000 |",
-        f"| 30% ITC credit | -$3,600 |",
-        f"| **Net cost after ITC** | **$8,400** |",
-        f"| Annual solar output | {annual_kwh:,.0f} kWh |",
-        f"| Residential rate | {rate:.2f} ¢/kWh |",
-        f"| Annual savings | ${annual_savings:,.0f} |",
+        f"*Source: vault report data · Rate: {rate:.2f}¢/kWh · "
+        f"Output basis: {annual_kwh:,.0f} kWh/yr (4kW PVWatts)*\n",
+        f"| System | Gross Cost | Net (ITC) | Annual Output | "
+        f"Annual Savings | Payback | 10yr ROI |",
+        f"|--------|-----------|-----------|---------------|"
+        f"---------------|---------|----------|",
     ]
 
-    if simple_payback:
-        lines.append(
-            f"| **Simple payback** | **{simple_payback:.1f} years** |"
+    best_payback = None
+    best_label   = ""
+
+    for sys in system_sizes:
+        kw          = sys["kw"]
+        gross       = kw * COST_PER_KW
+        net         = gross * (1 - ITC_RATE)
+        itc_saving  = gross - net
+        # Scale annual output proportionally from PVWatts 4kW base
+        sys_kwh     = annual_kwh * (kw / 4)
+        savings     = sys_kwh * (rate / 100)
+        payback     = net / savings if savings > 0 else None
+        ten_savings = sum(
+            sys_kwh * ((1 - DEGRADATION) ** yr) * (rate / 100)
+            for yr in range(10)
         )
-    lines.append(f"| 10-year savings | ${ten_yr_savings:,.0f} |")
-    lines.append(f"| 10-year ROI | {ten_yr_roi:.1f}% |")
+        roi_10      = ((ten_savings - net) / net) * 100
+
+        pb_str = f"{payback:.1f} yr" if payback else "—"
+        lines.append(
+            f"| {sys['label']} "
+            f"| ${gross:,.0f} "
+            f"| ${net:,.0f} (-${itc_saving:,.0f} ITC) "
+            f"| {sys_kwh:,.0f} kWh "
+            f"| ${savings:,.0f} "
+            f"| {pb_str} "
+            f"| {roi_10:.1f}% |"
+        )
+
+        if best_payback is None or (payback and payback < best_payback):
+            best_payback = payback
+            best_label   = sys["label"]
 
     lines.extend([
-        f"\n**Interpretation:** At {rate:.1f} ¢/kWh and "
-        f"{annual_kwh:,.0f} kWh/year output, a standard residential system "
-        f"pays back in {simple_payback:.1f} years after the 30% ITC. "
-        f"Over 10 years the system generates ${ten_yr_savings:,.0f} in "
-        f"savings on a ${net_cost:,.0f} net investment — "
-        f"a {ten_yr_roi:.0f}% return.",
-        f"\n*Assumptions: $12,000 system cost, 30% ITC, no degradation, "
-        f"flat rates. Actual results vary.*",
+        f"\n**Key metrics at {rate:.1f}¢/kWh:**",
+        f"- All system sizes share the same payback period — "
+        f"cost and output scale proportionally",
+        f"- Payback: **{best_payback:.1f} years** after 30% ITC",
+        f"- Larger systems multiply absolute savings — "
+        f"choose based on roof space and consumption",
+        f"\n*Assumptions: ${COST_PER_KW:,}/kW installed cost, "
+        f"30% ITC, 0.5%/yr panel degradation, flat rates. "
+        f"Output scaled from PVWatts 4kW simulation. "
+        f"Actual results vary by roof, shading, and system design.*",
     ])
 
     result = "\n".join(lines)

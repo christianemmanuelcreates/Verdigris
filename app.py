@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -162,6 +163,7 @@ def init_state():
         "report_type":     "solar_viability",
         "current_report":  None,
         "market_intel_result": None,
+        "post_report_action": None,
         "vault_filter":    "All",
         "selected_report": None,
     }
@@ -267,7 +269,7 @@ def render_sidebar():
         )
 
         with st.popover("📈  Payback calculator", 
-                        use_container_width=True):
+                        width='stretch'):
             st.markdown(
                 "<div style='font-family:monospace;font-size:11px;"
                 "color:#4ECDC4;margin-bottom:8px;'>"
@@ -291,7 +293,7 @@ def render_sidebar():
                     st.rerun()
 
         with st.popover("🎯  Rate sensitivity",
-                        use_container_width=True):
+                        width='stretch'):
             st.markdown(
                 "<div style='font-family:monospace;font-size:11px;"
                 "color:#4ECDC4;margin-bottom:8px;'>"
@@ -317,7 +319,7 @@ def render_sidebar():
                     st.rerun()
 
         if st.button("🏆  Market ranking", 
-                     use_container_width=True):
+                     width='stretch'):
             with st.spinner("Ranking markets..."):
                 from memory.search import _analysis_market_ranking
                 result = _analysis_market_ranking()
@@ -325,7 +327,7 @@ def render_sidebar():
             st.rerun()
 
         with st.popover("🔬  Market intelligence",
-                        use_container_width=True):
+                        width='stretch'):
             st.markdown(
                 "<div style='font-family:monospace;font-size:11px;"
                 "color:#4ECDC4;margin-bottom:8px;'>"
@@ -334,7 +336,7 @@ def render_sidebar():
             )
             st.caption(
                 "K-Means clustering · Linear regression · "
-                "Decision tree · Opportunity scoring"
+                "LCOE analysis · Rate trajectory"
             )
             mi_location = st.text_input(
                 "Location",
@@ -351,11 +353,28 @@ def render_sidebar():
                         result = run_full_market_analysis(
                             mi_location, reports
                         )
-                    st.session_state.market_intel_result = result
-                    _add_message("user",
-                        f"Market intelligence for {mi_location}")
-                    st.session_state.mode = "market_intel_view"
-                    st.rerun()
+                    # If location not in vault, seed it first
+                    # then redirect through full report pipeline
+                    if (isinstance(result, dict) and
+                            not result.get("target")):
+                        _add_message("assistant",
+                            f"{mi_location} is not in the knowledge "
+                            f"base yet. Running a solar viability "
+                            f"report first so I can include it in "
+                            f"the cluster analysis.",
+                            badge="report"
+                        )
+                        st.session_state.report_location = mi_location
+                        st.session_state.report_type = "solar_viability"
+                        st.session_state.post_report_action = "market_intel"
+                        st.session_state.mode = "report_running"
+                        st.rerun()
+                    else:
+                        st.session_state.market_intel_result = result
+                        _add_message("user",
+                            f"Market intelligence for {mi_location}")
+                        st.session_state.mode = "market_intel_view"
+                        st.rerun()
 
         st.markdown("<hr style='border-color:#2D5A5A;margin:16px 0;'>",
                     unsafe_allow_html=True)
@@ -405,7 +424,7 @@ def render_sidebar():
             if st.button(
                 f"**{r['location']}** · {label}",
                 key=f"report_{r['filename']}",
-                use_container_width=True,
+                width='stretch',
                 help=r["headline"][:120] if r["headline"] else ""
             ):
                 st.session_state.selected_report = r
@@ -613,7 +632,7 @@ def render_home():
     if st.session_state.mode == "home":
         col1, col2, col3 = st.columns([2, 2, 1.5])
         with col1:
-            if st.button("📋  Run a report", use_container_width=True):
+            if st.button("📋  Run a report", width='stretch'):
                 _add_message("assistant",
                     "Which location would you like to analyze?\n\n"
                     "_Enter a U.S. state, city, ZIP code, or country name._",
@@ -622,7 +641,7 @@ def render_home():
                 st.session_state.mode = "report_location"
                 st.rerun()
         with col2:
-            if st.button("💬  Ask a question", use_container_width=True):
+            if st.button("💬  Ask a question", width='stretch'):
                 _add_message("assistant",
                     "Ask me anything about energy markets, solar economics, "
                     "or reports we've run.\n\n"
@@ -633,7 +652,7 @@ def render_home():
                 st.session_state.mode = "chat"
                 st.rerun()
         with col3:
-            if st.button("🔬  Analyse", use_container_width=True):
+            if st.button("🔬  Run analysis", width='stretch'):
                 _add_message("assistant",
                     "Which analysis would you like to run?\n\n"
                     "Use the **Quick Analyses** buttons in the sidebar, or "
@@ -667,17 +686,17 @@ def render_report_intake():
     elif mode == "report_type":
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("☀️  Solar Viability", use_container_width=True):
+            if st.button("☀️  Solar Viability", width='stretch'):
                 st.session_state.report_type = "solar_viability"
                 st.session_state.mode = "report_running"
                 _add_message("user", "Solar Viability Assessment")
                 st.rerun()
-            if st.button("⚡  Rate & ROI", use_container_width=True):
+            if st.button("⚡  Rate & ROI", width='stretch'):
                 st.session_state.report_type = "rate_roi"
                 st.session_state.mode = "report_running"
                 _add_message("user", "Rate & ROI Analysis")
                 st.rerun()
-            if st.button("📈  Demand Forecast", use_container_width=True):
+            if st.button("📈  Demand Forecast", width='stretch'):
                 st.session_state.report_type = "demand_forecast"
                 st.session_state.mode = "report_running"
                 _add_message("user", "Energy Demand Forecast")
@@ -692,12 +711,12 @@ def render_report_intake():
                 )
                 st.rerun()
         with col2:
-            if st.button("🌍  Market Comparison", use_container_width=True):
+            if st.button("🌍  Market Comparison", width='stretch'):
                 st.session_state.report_type = "market_comparison"
                 st.session_state.mode = "report_running"
                 _add_message("user", "Market Comparison")
                 st.rerun()
-            if st.button("📄  Executive Summary", use_container_width=True):
+            if st.button("📄  Executive Summary", width='stretch'):
                 st.session_state.report_type = "executive_summary"
                 st.session_state.mode = "report_running"
                 _add_message("user", "Executive Summary")
@@ -723,7 +742,14 @@ def render_report_intake():
             _add_message("assistant", error_msg, badge="report")
             st.session_state._last_error = ""
 
-        st.session_state.mode = "chat"
+        post_action = st.session_state.get(
+            "post_report_action"
+        )
+        st.session_state.post_report_action = None
+        if post_action == "market_intel":
+            st.session_state.mode = "analysis_market_intel"
+        else:
+            st.session_state.mode = "chat"
         st.rerun()
 
 
@@ -760,6 +786,24 @@ def _render_analysis_intake(analysis_type: str):
                 reports = get_vault_reports()
                 LOGGER.info("MARKET INTEL ── vault reports loaded: %d", len(reports))
                 result = run_full_market_analysis(location, reports)
+
+                # Auto-seed: if location not in vault,
+                # run solar viability first then retry
+                if (isinstance(result, dict) and
+                        not result.get("target")):
+                    _add_message("assistant",
+                        f"{location} is not in the knowledge "
+                        f"base yet. Running a solar viability "
+                        f"report first so I can include it in "
+                        f"the cluster analysis.",
+                        badge="report"
+                    )
+                    st.session_state.report_location = location
+                    st.session_state.report_type = "solar_viability"
+                    st.session_state.post_report_action = "market_intel"
+                    st.session_state.mode = "report_running"
+                    st.rerun()
+                    return
                 LOGGER.info("MARKET INTEL ── result type: %s", type(result))
                 if isinstance(result, dict):
                     LOGGER.info("MARKET INTEL ── keys: %s", list(result.keys()))
@@ -828,7 +872,7 @@ def _render_analysis_intake(analysis_type: str):
                             height=360,
                         )
                         fig.update_traces(marker_line_width=0)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
 
                     # ── Analyst deep dive expander ─────────────────
                     with st.expander(
@@ -874,7 +918,7 @@ def _render_analysis_intake(analysis_type: str):
                                     margin=dict(l=0, r=0, t=40, b=0),
                                     height=400,
                                 )
-                                st.plotly_chart(fig2, use_container_width=True)
+                                st.plotly_chart(fig2, width='stretch')
 
                         if reg:
                             st.markdown(
@@ -1029,7 +1073,8 @@ def _render_market_intel_dashboard():
         return
 
     data   = result.get("data", {})
-    opp    = data.get("opportunity")
+    lcoe   = data.get("lcoe")
+    traj   = data.get("rate_trajectory")
     km     = data.get("kmeans")
     reg    = data.get("regression")
 
@@ -1052,44 +1097,267 @@ def _render_market_intel_dashboard():
               f"{target.get('viability', 0):.0f} / 100")
     c2.metric("Electricity Rate",
               f"{target.get('rate', 0):.1f} ¢/kWh")
-    c3.metric("Payback Period",
+    c3.metric("Payback (PVWatts)",
               f"{target.get('payback_years', 0):.1f} yrs"
-              if target.get('payback_years') else "—")
+              if target.get('payback_years') else "—",
+              help="Location-specific estimate from NREL PVWatts simulation")
     c4.metric("Solar Resource",
               f"{target.get('irradiance', 0):.2f} kWh/m²/d")
 
     st.markdown("---")
 
-    # Opportunity bar chart
-    if opp and opp.scores:
-        top10 = sorted(
-            opp.scores, key=lambda x: -x["opp_score"]
-        )[:10]
-        fig = px.bar(
-            top10,
-            x="opp_score",
-            y="name",
-            orientation="h",
-            color="opp_score",
-            color_continuous_scale=[
-                "#0F2A1E", "#1A3A3A", "#2D5A5A", "#4ECDC4"
-            ],
-            labels={"opp_score": "Opportunity Score",
-                    "name": "Market"},
-            title="Top 10 Markets by Deployment Opportunity",
+    # LCOE comparison table
+    if lcoe and lcoe.rows_res:
+        import pandas as pd
+
+        st.markdown(
+            "<div style='font-family:monospace;font-size:11px;"
+            "color:#4ECDC4;letter-spacing:.12em;margin-bottom:8px;'>"
+            "LEVELIZED COST OF ENERGY — SYSTEM COMPARISON"
+            "</div>",
+            unsafe_allow_html=True
         )
-        fig.update_layout(
+
+        is_us = target.get("is_us", False)
+        grid_rate = target.get("rate", 0)
+        lcoe_val  = lcoe.lcoe_cents_kwh
+        lcoe_noitc = lcoe.lcoe_cents_kwh_noitc
+        spread    = grid_rate - lcoe_val
+
+        # Residential side by side ITC comparison
+        st.markdown("**Residential Systems**")
+        col_itc, col_noitc = st.columns(2)
+
+        def _build_res_df(rows, use_itc):
+            data = []
+            for row in rows:
+                net  = row["net_cost"] if use_itc else row["net_cost_noitc"]
+                lc   = row["lcoe"] if use_itc else row["lcoe_noitc"]
+                pb   = row["payback_res"] if use_itc else row["payback_noitc"]
+                npv  = row["npv_25yr_res"] if use_itc else row["npv_25yr_noitc"]
+                data.append({
+                    "System":      row["system"].split("(")[0].strip(),
+                    "Net Cost":    f"${net:,}",
+                    "LCOE":        f"{lc:.1f}¢",
+                    "Annual kWh":  f"{row['annual_kwh']:,}",
+                    "Annual Save": f"${row['annual_savings_res']:,}",
+                    "Payback":     f"{pb}yr",
+                    "25yr NPV":    f"${npv:,}",
+                })
+            return pd.DataFrame(data)
+
+        with col_itc:
+            st.caption("With 30% ITC" if is_us else "Standard")
+            st.dataframe(
+                _build_res_df(lcoe.rows_res, use_itc=True),
+                width='stretch',
+                hide_index=True,
+            )
+        with col_noitc:
+            st.caption("Without ITC / Post-incentive")
+            st.dataframe(
+                _build_res_df(lcoe.rows_res, use_itc=False),
+                width='stretch',
+                hide_index=True,
+            )
+
+        # LCOE vs grid verdict
+        if spread > 0:
+            verdict = (
+                f"Solar LCOE **{lcoe_val:.1f}¢** (with ITC) · "
+                f"**{lcoe_noitc:.1f}¢** (without ITC) · "
+                f"Grid **{grid_rate:.1f}¢** · "
+                f"Solar is **{spread:.1f}¢ cheaper** than grid."
+            )
+        else:
+            verdict = (
+                f"Solar LCOE {lcoe_val:.1f}¢ (with ITC) · "
+                f"{lcoe_noitc:.1f}¢ (without ITC) · "
+                f"Grid {grid_rate:.1f}¢ · "
+                f"Solar parity when grid exceeds "
+                f"{lcoe.break_even_rate:.1f}¢."
+            )
+        st.markdown(verdict)
+
+        st.caption(
+            "📌 LCOE payback is a standardized estimate using "
+            "irradiance × efficiency. The PVWatts payback on the "
+            "metric card above is location-specific and accounts "
+            "for actual roof orientation, shading, and system losses. "
+            "Both are valid — LCOE enables cross-market comparison; "
+            "PVWatts gives the more accurate single-site figure."
+        )
+
+        # Commercial systems
+        if lcoe.rows_com:
+            st.markdown("**Commercial Systems**")
+            st.caption(
+                "Commercial rates applied · "
+                "Section 48 ITC may apply — consult tax advisor"
+            )
+            com_data = []
+            for row in lcoe.rows_com:
+                com_data.append({
+                    "System":      row["system"].split("(")[0].strip(),
+                    "Gross Cost":  f"${row['gross_cost']:,}",
+                    "LCOE":        f"{row['lcoe']:.1f}¢",
+                    "Annual kWh":  f"{row['annual_kwh']:,}",
+                    "Annual Save": f"${row['annual_savings_primary']:,}",
+                    "Payback":     f"{row['payback_primary']}yr",
+                    "25yr NPV":    f"${row['npv_25yr_primary']:,}",
+                })
+            st.dataframe(
+                pd.DataFrame(com_data),
+                width='stretch',
+                hide_index=True,
+            )
+
+        # Cumulative savings chart
+        st.markdown("**25-Year Cumulative Savings**")
+        st.caption(
+            "Rising grid rates applied year-by-year · "
+            "Residential solid · Commercial dashed"
+        )
+
+        capped_cagr = min((traj.cagr / 100) if traj else 0.03, 0.05)
+        DEGRADATION = 0.005
+        LIFETIME    = 25
+
+        fig_cum = go.Figure()
+        colors_res = ["#4ECDC4", "#2D9D9D", "#1A6B6B"]
+        colors_com = ["#C9A96E", "#A07840", "#6B4F28"]
+
+        for rows_list, colors, is_res in [
+            (lcoe.rows_res, colors_res, True),
+            (lcoe.rows_com, colors_com, False),
+        ]:
+            for idx, row in enumerate(rows_list):
+                net        = row["net_cost"]
+                annual_kwh = row["annual_kwh"]
+                base_rate  = (
+                    grid_rate / 100 if is_res
+                    else (grid_rate * 0.55) / 100
+                )
+                cumulative = [-net]
+                for yr in range(1, LIFETIME + 1):
+                    yr_kwh     = annual_kwh * ((1 - DEGRADATION) ** yr)
+                    yr_rate    = base_rate * ((1 + capped_cagr) ** yr)
+                    cumulative.append(cumulative[-1] + yr_kwh * yr_rate)
+
+                fig_cum.add_trace(go.Scatter(
+                    x=list(range(0, LIFETIME + 1)),
+                    y=[round(v) for v in cumulative],
+                    mode="lines",
+                    name=row["system"].split("(")[0].strip(),
+                    line=dict(
+                        color=colors[idx % len(colors)],
+                        width=2,
+                        dash="solid" if is_res else "dash",
+                    ),
+                ))
+
+        fig_cum.add_hline(
+            y=0,
+            line_dash="dot",
+            line_color="#E8A07A",
+            annotation_text="Break-even",
+            annotation_position="right",
+        )
+        fig_cum.update_layout(
             plot_bgcolor="#0F2A1E",
             paper_bgcolor="#0A1F15",
             font_color="#C9A96E",
             font_family="monospace",
-            coloraxis_showscale=False,
-            yaxis={"categoryorder": "total ascending"},
+            title="Cumulative Net Savings — All Systems (25 Years)",
+            xaxis_title="Year",
+            yaxis_title="Cumulative Savings ($)",
+            legend=dict(
+                bgcolor="#0A1F15",
+                bordercolor="#2D5A5A",
+                borderwidth=1,
+            ),
             margin=dict(l=0, r=0, t=40, b=0),
-            height=360,
+            height=420,
         )
-        fig.update_traces(marker_line_width=0)
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig_cum, width='stretch')
+        st.markdown("---")
+
+    # Rate trajectory chart
+    if traj and traj.historical:
+        st.markdown(
+            "<div style='font-family:monospace;font-size:11px;"
+            "color:#4ECDC4;letter-spacing:.12em;margin-bottom:8px;'>"
+            "RATE TRAJECTORY ANALYSIS"
+            "</div>",
+            unsafe_allow_html=True
+        )
+        hist_years  = sorted(traj.historical.keys())
+        hist_rates  = [traj.historical[y] for y in hist_years]
+        hist_com    = [
+            traj.historical_com.get(y, traj.historical[y] * 0.65)
+            for y in hist_years
+        ]
+        proj_years  = sorted(traj.projected.keys())
+        proj_rates  = [traj.projected[y] for y in proj_years]
+
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(
+            x=hist_years, y=hist_rates,
+            mode="lines+markers",
+            name="Residential (actual)",
+            line=dict(color="#4ECDC4", width=2),
+        ))
+        fig3.add_trace(go.Scatter(
+            x=hist_years, y=hist_com,
+            mode="lines+markers",
+            name="Commercial (actual)",
+            line=dict(color="#C9A96E", width=2),
+        ))
+        fig3.add_trace(go.Scatter(
+            x=proj_years, y=proj_rates,
+            mode="lines",
+            name=f"Projected ({traj.cagr:.1f}% CAGR)",
+            line=dict(color="#4ECDC4", width=2, dash="dash"),
+        ))
+        if traj.lcoe_reference > 0:
+            all_years = hist_years + proj_years
+            fig3.add_trace(go.Scatter(
+                x=[min(all_years), max(all_years)],
+                y=[traj.lcoe_reference, traj.lcoe_reference],
+                mode="lines",
+                name=f"Solar LCOE ({traj.lcoe_reference:.1f}¢)",
+                line=dict(color="#7BC67A", width=1.5, dash="dot"),
+            ))
+        if traj.crisis_year:
+            fig3.add_vline(
+                x=traj.crisis_year,
+                line_dash="dot",
+                line_color="#E8A07A",
+                annotation_text="Energy crisis",
+                annotation_position="top right",
+            )
+        fig3.update_layout(
+            plot_bgcolor="#0F2A1E",
+            paper_bgcolor="#0A1F15",
+            font_color="#C9A96E",
+            font_family="monospace",
+            title="Electricity Rate Trajectory (¢/kWh)",
+            xaxis_title="Year",
+            yaxis_title="Rate (¢/kWh)",
+            legend=dict(
+                bgcolor="#0A1F15",
+                bordercolor="#2D5A5A",
+                borderwidth=1,
+            ),
+            margin=dict(l=0, r=0, t=40, b=0),
+            height=380,
+        )
+        st.plotly_chart(fig3, width='stretch')
+        st.markdown(
+            f"*Source: {traj.source} · "
+            f"CAGR {traj.cagr:.1f}%/year*"
+        )
+        st.markdown("---")
 
     # Scatter plot
     with st.expander(

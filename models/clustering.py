@@ -131,19 +131,28 @@ class RegressionResult:
 
 
 @dataclass
-class DecisionTreeResult:
-    rules:          list[str]       # plain-English go/no-go rules
-    target_passes:  bool
-    explanation:    str
+class LCOEResult:
+    rows_res: list[dict]         # residential rows with ITC
+    rows_res_noitc: list[dict]   # residential rows without ITC
+    rows_com: list[dict]         # commercial rows
+    rows: list[dict]             # kept for backward compat = rows_res
+    lcoe_cents_kwh: float        # 8kW residential with ITC
+    lcoe_cents_kwh_noitc: float  # 8kW residential without ITC
+    break_even_rate: float
+    is_us: bool
+    explanation: str
 
 
 @dataclass
-class OpportunityResult:
-    scores:         list[dict]      # all locations with scores
-    target_score:   float
-    target_rank:    int
-    recommendation: str
-    explanation:    str
+class RateTrajectoryResult:
+    historical: dict[int, float]   # {year: residential_cents}
+    historical_com: dict[int, float]  # {year: commercial_cents}
+    projected: dict[int, float]    # {year: projected_cents}
+    cagr: float
+    crisis_year: int | None
+    source: str
+    lcoe_reference: float          # horizontal line on chart
+    explanation: str
 
 
 # ── Feature extraction ────────────────────────────────────────────────────────
@@ -475,6 +484,368 @@ def run_regression(fm: FeatureMatrix) -> RegressionResult:
     )
 
 
+def compute_lcoe_table(
+    target_lf: "LocationFeatures",
+    is_us: bool = True,
+    commercial_rate: float | None = None,
+) -> LCOEResult:
+    """
+    Computes LCOE and 25-year NPV for three system sizes.
+    Uses industry-standard assumptions documented in code.
+    """
+    SYSTEM_LIFETIME = 25       # years
+    DEGRADATION_RATE = 0.005   # 0.5%/year industry standard
+    DISCOUNT_RATE = 0.05       # 5% NPV discount rate
+    COST_PER_KW = 3000         # USD installed cost per kW
+    ITC = 0.30 if is_us else 0.0  # 30% federal tax credit (US only)
+    PANEL_EFFICIENCY = 0.80    # system derate factor
+
+    irradiance = target_lf.irradiance
+    res_rate = target_lf.rate_cents_kwh / 100  # convert to $/kWh
+    com_rate = (commercial_rate / 100) if commercial_rate else res_rate * 0.65
+
+    system_sizes = [
+        {"kw": 4,   "label": "4 kW (small residential)",   "sector": "residential"},
+        {"kw": 8,   "label": "8 kW (standard residential)", "sector": "residential"},
+        {"kw": 12,  "label": "12 kW (large residential)",   "sector": "residential"},
+        {"kw": 50,  "label": "50 kW (small commercial)",    "sector": "commercial"},
+        {"kw": 250, "label": "250 kW (mid commercial)",     "sector": "commercial"},
+        {"kw": 500, "label": "500 kW (large commercial)",   "sector": "commercial"},
+    ]
+
+    rows = []
+    lcoe_8kw = 0.0
+
+    for sys in system_sizes:
+        kw = sys["kw"]
+        gross_cost = kw * COST_PER_KW
+        net_cost = gross_cost * (1 - ITC)
+
+        # Annual output with degradation series
+        annual_kwh_base = irradiance * 365 * kw * PANEL_EFFICIENCY
+        total_kwh = sum(
+            annual_kwh_base * ((1 - DEGRADATION_RATE) ** yr)
+            for yr in range(SYSTEM_LIFETIME)
+        )
+
+        lcoe = (net_cost / total_kwh) * 100  # cents/kWh
+
+        # Annual savings (year 1, residential)
+        annual_kwh_y1 = annual_kwh_base
+        annual_savings_res = annual_kwh_y1 * res_rate
+        annual_savings_com = annual_kwh_y1 * com_rate
+
+        # Payback
+        payback_res = net_cost / annual_savings_res if annual_savings_res else 99
+        payback_com = net_cost / annual_savings_com if annual_savings_com else 99
+
+        # 10-year ROI (residential)
+        ten_yr_savings = sum(
+            annual_kwh_base * ((1 - DEGRADATION_RATE) ** yr) * res_rate
+            for yr in range(10)
+        )
+        roi_10yr = ((ten_yr_savings - net_cost) / net_cost) * 100
+
+        # 25-year NPV (residential)
+        npv = -net_cost
+        for yr in range(1, SYSTEM_LIFETIME + 1):
+            yr_kwh = annual_kwh_base * ((1 - DEGRADATION_RATE) ** yr)
+            yr_savings = yr_kwh * res_rate
+            npv += yr_savings / ((1 + DISCOUNT_RATE) ** yr)
+
+        # 25-year NPV (commercial)
+        npv_com = -net_cost
+        for yr in range(1, SYSTEM_LIFETIME + 1):
+            yr_kwh = annual_kwh_base * ((1 - DEGRADATION_RATE) ** yr)
+            yr_savings = yr_kwh * com_rate
+            npv_com += yr_savings / ((1 + DISCOUNT_RATE) ** yr)
+
+        sector = sys.get("sector", "residential")
+        is_commercial = sector == "commercial"
+
+        # No ITC variant (net cost = gross cost)
+        net_cost_noitc = gross_cost
+        lcoe_noitc = (net_cost_noitc / total_kwh) * 100
+        payback_noitc = (
+            net_cost_noitc / annual_savings_res
+            if annual_savings_res else 99
+        )
+        npv_noitc = -net_cost_noitc
+        for yr in range(1, SYSTEM_LIFETIME + 1):
+            yr_kwh = annual_kwh_base * ((1 - DEGRADATION_RATE) ** yr)
+            npv_noitc += (yr_kwh * res_rate) / ((1 + DISCOUNT_RATE) ** yr)
+
+        if kw == 8 and not is_commercial:
+            lcoe_8kw = round(lcoe, 2)
+            lcoe_8kw_noitc = round(lcoe_noitc, 2)
+
+        # Primary savings for this sector
+        primary_rate = com_rate if is_commercial else res_rate
+        annual_savings_primary = round(annual_kwh_y1 * primary_rate)
+        payback_primary = round(
+            net_cost / annual_savings_primary
+            if annual_savings_primary else 99, 1
+        )
+        npv_primary = -net_cost
+        for yr in range(1, SYSTEM_LIFETIME + 1):
+            yr_kwh = annual_kwh_base * ((1 - DEGRADATION_RATE) ** yr)
+            npv_primary += (yr_kwh * primary_rate) / ((1 + DISCOUNT_RATE) ** yr)
+
+        row_data = {
+            "system":              sys["label"],
+            "kw":                  kw,
+            "sector":              sector,
+            "gross_cost":          gross_cost,
+            "net_cost":            round(net_cost),
+            "net_cost_noitc":      round(net_cost_noitc),
+            "itc_savings":         round(gross_cost - net_cost),
+            "lcoe":                round(lcoe, 2),
+            "lcoe_noitc":          round(lcoe_noitc, 2),
+            "annual_kwh":          round(annual_kwh_y1),
+            "annual_savings_res":  round(annual_savings_res),
+            "annual_savings_com":  round(annual_savings_com),
+            "annual_savings_primary": annual_savings_primary,
+            "payback_res":         round(payback_res, 1),
+            "payback_com":         round(payback_com, 1),
+            "payback_primary":     payback_primary,
+            "payback_noitc":       round(payback_noitc, 1),
+            "roi_10yr":            round(roi_10yr, 1),
+            "npv_25yr_res":        round(npv),
+            "npv_25yr_com":        round(npv_com),
+            "npv_25yr_primary":    round(npv_primary),
+            "npv_25yr_noitc":      round(npv_noitc),
+        }
+        rows.append(row_data)
+
+    # Break-even rate: grid rate at which LCOE = grid cost
+    # LCOE is fixed cost of solar — when grid rises to meet it,
+    # solar reaches parity
+    break_even = lcoe_8kw  # cents/kWh
+
+    rows_res     = [r for r in rows if r["sector"] == "residential"]
+    rows_res_noitc = rows_res  # same rows, noitc fields already present
+    rows_com     = [r for r in rows if r["sector"] == "commercial"]
+    lcoe_8kw_noitc = lcoe_8kw_noitc if 'lcoe_8kw_noitc' in dir() else lcoe_8kw
+
+    vs_grid = res_rate * 100 - lcoe_8kw
+    if vs_grid > 0:
+        verdict = (
+            f"Solar is **{vs_grid:.1f}¢/kWh cheaper** than "
+            f"grid at current rates."
+        )
+    elif vs_grid > -5:
+        verdict = (
+            f"Solar LCOE ({lcoe_8kw:.1f}¢) is near grid parity "
+            f"({res_rate*100:.1f}¢). Economics improve as rates rise."
+        )
+    else:
+        deficit = abs(vs_grid)
+        verdict = (
+            f"Solar LCOE ({lcoe_8kw:.1f}¢) exceeds current grid "
+            f"rate ({res_rate*100:.1f}¢) by {deficit:.1f}¢. "
+            f"Solar becomes cost-competitive when grid rate "
+            f"exceeds {break_even:.1f}¢/kWh."
+        )
+
+    itc_note = (
+        " (after 30% federal ITC)" if is_us
+        else " (no ITC applied — international market)"
+    )
+
+    explanation = (
+        f"## LCOE & System Economics\n\n"
+        f"**Levelized Cost of Energy (LCOE):** {lcoe_8kw:.1f}¢/kWh"
+        f"{itc_note}\n\n"
+        f"{verdict}\n\n"
+        f"*Assumptions: {SYSTEM_LIFETIME}-year system life, "
+        f"{DEGRADATION_RATE*100:.1f}%/year degradation, "
+        f"{DISCOUNT_RATE*100:.0f}% discount rate, "
+        f"${COST_PER_KW:,}/kW installed cost.*\n\n"
+    )
+
+    return LCOEResult(
+        rows_res=rows_res,
+        rows_res_noitc=rows_res_noitc,
+        rows_com=rows_com,
+        rows=rows_res,
+        lcoe_cents_kwh=lcoe_8kw,
+        lcoe_cents_kwh_noitc=lcoe_8kw_noitc,
+        break_even_rate=break_even,
+        is_us=is_us,
+        explanation=explanation,
+    )
+
+
+def compute_rate_trajectory(
+    location_name: str,
+    is_us: bool,
+    state_abbr: str | None = None,
+    iso2: str | None = None,
+) -> RateTrajectoryResult:
+    """
+    Computes historical and projected electricity rate trajectory.
+    U.S.: uses EIA warehouse data (eia_rates table).
+    EU/EEA: calls Eurostat live API via intl_rates.
+    Non-EU international: uses verified static CAGR table.
+    """
+    import sqlite3 as _sqlite3
+    from data.warehouse import WAREHOUSE_PATH
+    from data.intl_rates import get_intl_rate_history
+
+    historical_res: dict[int, float] = {}
+    historical_com: dict[int, float] = {}
+    cagr = 3.0
+    crisis_year = None
+    source = "Estimated"
+
+    if is_us and state_abbr:
+        # Query EIA warehouse for annual averages
+        try:
+            import sqlite3 as _sqlite3
+            from data.warehouse import WAREHOUSE_PATH
+            conn = _sqlite3.connect(WAREHOUSE_PATH)
+            rows = conn.execute(
+                """
+                SELECT substr(period, 1, 4) as yr,
+                                             AVG(rate_cents_kwh) as avg_price
+                FROM eia_rates
+                WHERE state_abbr = ?
+                                    AND sector = 'residential'
+                  AND period >= '2015-01'
+                GROUP BY yr
+                ORDER BY yr
+                """,
+                (state_abbr.upper(),)
+            ).fetchall()
+            conn.close()
+            if rows:
+                historical_res = {
+                    int(r[0]): round(r[1], 2)
+                    for r in rows if r[1]
+                }
+                source = "EIA retail sales data"
+        except Exception as exc:
+            LOGGER.warning("EIA warehouse query failed: %s", exc)
+
+        # Commercial from warehouse
+        try:
+            import sqlite3 as _sqlite3
+            from data.warehouse import WAREHOUSE_PATH
+            conn = _sqlite3.connect(WAREHOUSE_PATH)
+            rows_com = conn.execute(
+                """
+                SELECT substr(period, 1, 4) as yr,
+                                             AVG(rate_cents_kwh) as avg_price
+                FROM eia_rates
+                WHERE state_abbr = ?
+                                    AND sector = 'commercial'
+                  AND period >= '2015-01'
+                GROUP BY yr
+                ORDER BY yr
+                """,
+                (state_abbr.upper(),)
+            ).fetchall()
+            conn.close()
+            if rows_com:
+                historical_com = {
+                    int(r[0]): round(r[1], 2)
+                    for r in rows_com if r[1]
+                }
+        except Exception as exc:
+            LOGGER.warning("EIA commercial warehouse query failed: %s", exc)
+
+    else:
+        # International
+        code = iso2 or "US"
+        hist = get_intl_rate_history(code)
+        historical_res = hist.get("residential", {})
+        historical_com = hist.get("commercial", {})
+        cagr = hist.get("cagr_res", 3.0)
+        crisis_year = hist.get("crisis_year")
+        source = hist.get("source", "Estimated")
+
+    # Compute CAGR from historical if U.S.
+    if is_us and len(historical_res) >= 2:
+        years = sorted(historical_res.keys())
+        start = historical_res[years[0]]
+        end   = historical_res[years[-1]]
+        n_yrs = years[-1] - years[0]
+        if start > 0 and n_yrs > 0:
+            cagr = round(
+                ((end / start) ** (1 / n_yrs) - 1) * 100, 2
+            )
+
+    # Project 10 years forward from last known year
+    projected: dict[int, float] = {}
+    if historical_res:
+        last_year = max(historical_res.keys())
+        last_rate = historical_res[last_year]
+        # Use post-crisis stabilized CAGR for EU markets
+        proj_cagr = min(cagr, 5.0) / 100  # cap at 5% for projections
+        for yr in range(last_year + 1, last_year + 11):
+            years_fwd = yr - last_year
+            projected[yr] = round(
+                last_rate * ((1 + proj_cagr) ** years_fwd), 2
+            )
+
+    # Get LCOE reference (will be set by caller from LCOEResult)
+    lcoe_reference = 0.0
+
+    # Build explanation
+    if historical_res:
+        years = sorted(historical_res.keys())
+        first_rate = historical_res[years[0]]
+        last_rate  = historical_res[max(years)]
+        last_year  = max(years)
+        proj_5yr   = projected.get(last_year + 5, last_rate)
+        proj_10yr  = projected.get(last_year + 10, last_rate)
+
+        crisis_note = ""
+        if crisis_year:
+            crisis_note = (
+                f"\n\n> **Note:** The {crisis_year} energy crisis "
+                f"caused a sharp spike in rates. The projection uses "
+                f"a stabilized CAGR based on pre- and post-crisis "
+                f"trends rather than the spike peak."
+            )
+
+        explanation = (
+            f"## Rate Trajectory Analysis\n\n"
+            f"**Historical CAGR ({years[0]}–{last_year}):** "
+            f"{cagr:.1f}%/year\n\n"
+            f"| Year | Residential | Commercial |\n"
+            f"|------|-------------|------------|\n"
+            f"| {years[0]} | {first_rate:.1f}¢ | "
+            f"{historical_com.get(years[0], first_rate*0.65):.1f}¢ |\n"
+            f"| {last_year} | {last_rate:.1f}¢ | "
+            f"{historical_com.get(last_year, last_rate*0.65):.1f}¢ |\n"
+            f"| {last_year+5}* | {proj_5yr:.1f}¢ | "
+            f"{proj_5yr*0.65:.1f}¢ |\n"
+            f"| {last_year+10}* | {proj_10yr:.1f}¢ | "
+            f"{proj_10yr*0.65:.1f}¢ |\n\n"
+            f"*Projected at {min(cagr, 5.0):.1f}% CAGR "
+            f"(capped at 5% for conservative projection)*\n\n"
+            f"**Source:** {source}"
+            f"{crisis_note}"
+        )
+    else:
+        explanation = (
+            "## Rate Trajectory Analysis\n\n"
+            "Historical rate data not available for this location."
+        )
+
+    return RateTrajectoryResult(
+        historical=historical_res,
+        historical_com=historical_com,
+        projected=projected,
+        cagr=cagr,
+        crisis_year=crisis_year,
+        source=source,
+        lcoe_reference=lcoe_reference,
+        explanation=explanation,
+    )
+
+
 def _regression_explanation(
     coefs: dict,
     r2: float,
@@ -546,273 +917,6 @@ def _regression_explanation(
             f"{top_label} is the primary lever. Focus marketing spend "
             "on markets where this metric is favorable."
         )
-
-    return "\n".join(lines)
-
-
-# ── Model 3 — Decision Tree Rules ────────────────────────────────────────────
-
-def run_decision_tree(fm: FeatureMatrix) -> DecisionTreeResult:
-    """
-    Decision tree trained to classify markets as viable (score >= 50)
-    or not viable (score < 50).
-
-    Extracts human-readable go/no-go rules that a rep can memorize.
-    Threshold of 50 is configurable — represents 'worth deploying crew'.
-    """
-    from sklearn.tree import DecisionTreeClassifier, export_text
-
-    VIABILITY_THRESHOLD = 50
-
-    vi_idx = FEATURES.index("viability_score")
-    feature_cols = [i for i in range(len(FEATURES)) if i != vi_idx]
-    feature_names_clean = [FEATURES[i] for i in feature_cols]
-
-    X = fm.X[:, feature_cols]
-    y = (fm.X[:, vi_idx] >= VIABILITY_THRESHOLD).astype(int)
-
-    if len(X) < 4 or y.sum() < 1 or (1 - y).sum() < 1:
-        # Not enough examples of both classes
-        return DecisionTreeResult(
-            rules=["Insufficient data — need markets above and below 50/100"],
-            target_passes=False,
-            explanation=_dt_insufficient(fm),
-        )
-
-    dt = DecisionTreeClassifier(max_depth=3, min_samples_leaf=2, random_state=42)
-    dt.fit(X, y)
-
-    # Extract rules
-    rules = _extract_dt_rules(dt, feature_names_clean, fm.X, feature_cols)
-
-    # Evaluate target
-    target_passes = False
-    if fm.target_idx >= 0:
-        x_target = fm.X[fm.target_idx, feature_cols].reshape(1, -1)
-        target_passes = bool(dt.predict(x_target)[0] == 1)
-
-    explanation = _dt_explanation(rules, target_passes, fm, VIABILITY_THRESHOLD)
-
-    return DecisionTreeResult(
-        rules=rules,
-        target_passes=target_passes,
-        explanation=explanation,
-    )
-
-
-def _extract_dt_rules(
-    dt,
-    feature_names: list[str],
-    X: np.ndarray,
-    feature_cols: list[int],
-) -> list[str]:
-    """Converts decision tree splits into plain-English rules."""
-    from sklearn.tree import _tree
-
-    tree_ = dt.tree_
-    feature_name = [
-        FEATURE_LABELS.get(feature_names[i], feature_names[i])
-        if feature_names[i] != _tree.TREE_UNDEFINED else "undefined"
-        for i in tree_.feature
-    ]
-
-    rules = []
-
-    def recurse(node, depth, conditions):
-        if tree_.feature[node] == _tree.TREE_UNDEFINED:
-            # Leaf node
-            class_counts = tree_.value[node][0]
-            predicted = int(np.argmax(class_counts))
-            confidence = class_counts[predicted] / class_counts.sum()
-            if predicted == 1 and conditions:
-                rule = " AND ".join(conditions)
-                rules.append(
-                    f"GO: If {rule} → viable "
-                    f"({confidence*100:.0f}% confidence)"
-                )
-            elif predicted == 0 and conditions:
-                rule = " AND ".join(conditions)
-                rules.append(
-                    f"NO-GO: If {rule} → not viable "
-                    f"({confidence*100:.0f}% confidence)"
-                )
-            return
-
-        fname    = feature_name[node]
-        thresh   = tree_.threshold[node]
-
-        recurse(node + 1, depth + 1,
-                conditions + [f"{fname} ≤ {thresh:.1f}"])
-        recurse(tree_.children_right[node], depth + 1,
-                conditions + [f"{fname} > {thresh:.1f}"])
-
-    recurse(0, 0, [])
-    return rules[:6]  # Cap at 6 rules for readability
-
-
-def _dt_insufficient(fm: FeatureMatrix) -> str:
-    below = sum(1 for lf in fm.locations if lf.viability_score < 50)
-    above = sum(1 for lf in fm.locations if lf.viability_score >= 50)
-    return (
-        f"## Decision Tree Rules\n\n"
-        f"Need markets on both sides of the 50/100 viability threshold "
-        f"to extract go/no-go rules.\n\n"
-        f"Current portfolio: {above} viable markets, {below} below threshold.\n"
-        f"Run more reports in marginal markets to enable rule extraction."
-    )
-
-
-def _dt_explanation(
-    rules: list[str],
-    target_passes: bool,
-    fm: FeatureMatrix,
-    threshold: int,
-) -> str:
-    target_name = fm.names[fm.target_idx] if fm.target_idx >= 0 else "target"
-    verdict     = "PASSES" if target_passes else "DOES NOT PASS"
-    verdict_sym = "✓" if target_passes else "✗"
-    rec         = (
-        "Worth deploying crew — economics support it."
-        if target_passes else
-        "Not recommended for crew deployment at current rates. "
-        "Monitor for rate increases."
-    )
-
-    lines = [
-        f"## Decision Tree — Go/No-Go Rules",
-        f"*Trained on {len(fm.locations)} markets, "
-        f"viability threshold: {threshold}/100*\n",
-        f"**How it works:** A decision tree learns which combinations of "
-        f"rate, sun, and density separate your viable markets (score ≥ {threshold}) "
-        f"from marginal ones. The rules below can be memorized by any rep "
-        f"— no laptop required in the field.\n",
-        f"**Learned rules from your portfolio:**\n",
-    ]
-
-    for rule in rules:
-        prefix = "🟢" if rule.startswith("GO") else "🔴"
-        lines.append(f"{prefix} {rule}")
-
-    lines.extend([
-        f"\n**{target_name} verdict:** {verdict_sym} {verdict}",
-        f"_{rec}_",
-    ])
-
-    return "\n".join(lines)
-
-
-# ── Model 4 — Opportunity Scoring ────────────────────────────────────────────
-
-def score_opportunity(fm: FeatureMatrix) -> OpportunityResult:
-    """
-    Transparent weighted composite score for crew deployment ranking.
-
-    Unlike the ML models above, this is an auditable formula — no black box.
-    Weights are tuned for residential solar sales and documented in code.
-    Managers can adjust weights in OPPORTUNITY_WEIGHTS at top of file.
-    """
-    scores = []
-
-    for i, lf in enumerate(fm.locations):
-        row = fm.X_scaled[i]
-
-        # Payback is already inverted in X_scaled (lower payback = higher score)
-        weighted = (
-            row[FEATURES.index("irradiance")]     * OPPORTUNITY_WEIGHTS["irradiance"] +
-            row[FEATURES.index("rate_cents_kwh")] * OPPORTUNITY_WEIGHTS["rate_cents_kwh"] +
-            row[FEATURES.index("density")]         * OPPORTUNITY_WEIGHTS["density"] +
-            row[FEATURES.index("viability_score")] * OPPORTUNITY_WEIGHTS["viability_score"] +
-            row[FEATURES.index("payback_years")]   * OPPORTUNITY_WEIGHTS["payback_years"]
-        )
-
-        scores.append({
-            "name":           lf.name,
-            "opp_score":      round(weighted * 100, 1),
-            "viability":      lf.viability_score,
-            "rate":           lf.rate_cents_kwh,
-            "irradiance":     lf.irradiance,
-            "payback_years":  lf.payback_years,
-        })
-
-    scores.sort(key=lambda x: -x["opp_score"])
-
-    target_score = 0.0
-    target_rank  = -1
-    target_name  = fm.names[fm.target_idx] if fm.target_idx >= 0 else ""
-
-    if fm.target_idx >= 0:
-        for rank, s in enumerate(scores, 1):
-            if s["name"] == target_name:
-                target_score = s["opp_score"]
-                target_rank  = rank
-                break
-
-    recommendation = _opp_recommendation(target_score, target_rank, len(scores))
-    explanation    = _opp_explanation(scores, target_name, target_score,
-                                       target_rank, recommendation)
-
-    return OpportunityResult(
-        scores=scores,
-        target_score=target_score,
-        target_rank=target_rank,
-        recommendation=recommendation,
-        explanation=explanation,
-    )
-
-
-def _opp_recommendation(score: float, rank: int, total: int) -> str:
-    pct = rank / total if total > 0 else 1.0
-    if pct <= 0.20:
-        return "Priority market — assign full crew, maximum marketing spend"
-    elif pct <= 0.40:
-        return "Strong candidate — assign crew, standard marketing"
-    elif pct <= 0.60:
-        return "Test market — assign 1 crew, measure performance before scaling"
-    elif pct <= 0.80:
-        return "Monitor — not ready for crew deployment, watch rate trends"
-    else:
-        return "Low priority — reassign resources to higher-ranked markets"
-
-
-def _opp_explanation(
-    scores: list[dict],
-    target: str,
-    target_score: float,
-    target_rank: int,
-    recommendation: str,
-) -> str:
-    n = len(scores)
-    lines = [
-        f"## Opportunity Scoring — Deployment Ranking",
-        f"*{n} markets scored, weights: "
-        f"rate 30% · viability 25% · density 20% · "
-        f"irradiance 15% · payback 10%*\n",
-        f"**How it works:** Each market receives a 0–100 score from a "
-        f"weighted formula. Unlike the other models, this formula is fully "
-        f"transparent — you can see exactly why each market ranks where it does. "
-        f"Weights are tuned for residential solar sales economics.\n",
-        f"**Full market ranking:**\n",
-        "| Rank | Market | Opp Score | Viability | Rate (¢) | Payback |",
-        "|------|--------|-----------|-----------|----------|---------|",
-    ]
-
-    for i, s in enumerate(scores[:15], 1):
-        marker  = " ◀" if s["name"] == target else ""
-        pb_str  = f"{s['payback_years']:.1f}yr" if s["payback_years"] else "—"
-        lines.append(
-            f"| {i} | {s['name']}{marker} | {s['opp_score']} | "
-            f"{s['viability']:.0f}/100 | {s['rate']:.1f} | {pb_str} |"
-        )
-
-    if n > 15:
-        lines.append(f"| ... | _{n - 15} more markets_ | | | | |")
-
-    if target and target_rank > 0:
-        lines.extend([
-            f"\n**{target}:** Rank {target_rank} of {n} "
-            f"(score: {target_score:.1f}/100)",
-            f"**Recommendation:** {recommendation}",
-        ])
 
     return "\n".join(lines)
 
@@ -938,22 +1042,43 @@ def run_full_market_analysis(
         LOGGER.error("Regression failed: %s", e)
         sections.append(f"*Regression unavailable: {e}*\n---\n")
 
-    try:
-        dt_result = run_decision_tree(fm)
-        LOGGER.info("CLUSTERING ── decision tree complete: %d rules", len(dt_result.rules))
-        sections.append(dt_result.explanation)
-        sections.append("\n---\n")
-    except Exception as e:
-        LOGGER.error("Decision tree failed: %s", e)
-        sections.append(f"*Decision tree unavailable: {e}*\n---\n")
+    # Determine location metadata for new models
+    from data.location import resolve as _resolve
+    _loc_meta = _resolve(location) or {}
+    _is_us    = _loc_meta.get("is_us", False)
+    _state    = _loc_meta.get("state_abbr")
+    _iso2     = _loc_meta.get("iso2")
 
     try:
-        opp_result = score_opportunity(fm)
-        LOGGER.info("CLUSTERING ── opportunity complete: %d scores", len(opp_result.scores))
-        sections.append(opp_result.explanation)
+        lcoe_result = compute_lcoe_table(
+            target_lf,
+            is_us=_is_us,
+        )
+        LOGGER.info("CLUSTERING ── LCOE complete: %.1f¢/kWh",
+                    lcoe_result.lcoe_cents_kwh)
+        sections.append(lcoe_result.explanation)
+        sections.append("\n---\n")
     except Exception as e:
-        LOGGER.error("Opportunity scoring failed: %s", e)
-        sections.append(f"*Opportunity scoring unavailable: {e}*")
+        LOGGER.error("LCOE failed: %s", e)
+        lcoe_result = None
+        sections.append(f"*LCOE unavailable: {e}*\n---\n")
+
+    try:
+        traj_result = compute_rate_trajectory(
+            location_name=target_name,
+            is_us=_is_us,
+            state_abbr=_state,
+            iso2=_iso2,
+        )
+        if lcoe_result:
+            traj_result.lcoe_reference = lcoe_result.lcoe_cents_kwh
+        LOGGER.info("CLUSTERING ── trajectory complete: CAGR=%.1f%%",
+                    traj_result.cagr)
+        sections.append(traj_result.explanation)
+    except Exception as e:
+        LOGGER.error("Rate trajectory failed: %s", e)
+        traj_result = None
+        sections.append(f"*Rate trajectory unavailable: {e}*")
 
     return {
         "markdown_report": "\n".join(sections),
@@ -964,12 +1089,15 @@ def run_full_market_analysis(
             "viability":      target_lf.viability_score,
             "payback_years":  target_lf.payback_years,
             "density":        target_lf.density,
+            "is_us":          _is_us,
+            "state_abbr":     _state,
+            "iso2":           _iso2,
         },
         "data": {
-            "kmeans":        km_result if 'km_result' in dir() else None,
-            "regression":    reg_result if 'reg_result' in dir() else None,
-            "decision_tree": dt_result if 'dt_result' in dir() else None,
-            "opportunity":   opp_result if 'opp_result' in dir() else None,
+            "kmeans":          km_result if 'km_result' in dir() else None,
+            "regression":      reg_result if 'reg_result' in dir() else None,
+            "lcoe":            lcoe_result if 'lcoe_result' in dir() else None,
+            "rate_trajectory": traj_result if 'traj_result' in dir() else None,
         },
         "n_markets": len(fm.locations),
         "_fm_locations": fm.locations,

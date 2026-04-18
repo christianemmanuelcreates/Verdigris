@@ -94,6 +94,36 @@ def run(location_input: str, report_type: str) -> dict:
     if "error" in location_obj:
         return {"error": f"Location resolution failed: {location_obj['error']}"}
 
+    if report_type == "demand_forecast":
+        scope = location_obj.get("scope", "")
+        is_us = location_obj.get("is_us", False)
+        if not is_us:
+            return {
+                "error": (
+                    "Demand forecast is only available for "
+                    "U.S. states. This location resolved as "
+                    "international. Try a U.S. state name instead."
+                )
+            }
+        if scope in ("zip", "city"):
+            state = location_obj.get("state_abbr", "")
+            state_name = location_obj.get("name", location_obj.get("state_abbr", ""))
+            return {
+                "error": (
+                    f"Demand forecast requires a U.S. state, "
+                    f"not a city or ZIP code. "
+                    f"Try '{state_name}' or '{state}' instead."
+                )
+            }
+        if not location_obj.get("state_abbr"):
+            return {
+                "error": (
+                    "Could not resolve this location to a U.S. state. "
+                    "Demand forecast requires a full state name like "
+                    "'Texas', 'California', or 'New York'."
+                )
+            }
+
     # Fetch data and run models
     data_package = _fetch_data(location_obj, report_type)
 
