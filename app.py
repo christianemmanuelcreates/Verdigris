@@ -14,12 +14,102 @@ import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
+import os as _os
+_log_dir = Path(__file__).parent / "logs"
+_log_dir.mkdir(exist_ok=True)
+_log_file = _log_dir / "verdigris.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(_log_file, encoding="utf-8"),
+    ]
 )
+
 LOGGER = logging.getLogger("verdigris")
+
+# ── Startup diagnostic ────────────────────────────────
+def _startup_check():
+    """Runs once on app launch. Logs system status."""
+    import sys as _sys
+    def _print(msg=""):
+        print(msg, file=_sys.stderr)
+
+    TEAL  = "\033[38;2;78;205;196m"
+    GOLD  = "\033[38;2;201;169;110m"
+    GREEN = "\033[38;2;123;198;122m"
+    RED   = "\033[38;2;232;99;99m"
+    DIM   = "\033[38;2;45;90;90m"
+    RESET = "\033[0m"
+
+    _print(f"\n{TEAL}╔══════════════════════════════════════════════════╗{RESET}")
+    _print(f"{TEAL}║  {GOLD}✦{TEAL} {GOLD}VERDIGRIS{RESET} — Energy Intelligence Platform{TEAL}      ║{RESET}")
+    _print(f"{TEAL}║    {DIM}Viridian Society · viridian R&D{TEAL}                  ║{RESET}")
+    _print(f"{TEAL}╚══════════════════════════════════════════════════╝{RESET}\n")
+
+    issues = []
+
+    # Vault
+    vault_path = _os.getenv("OBSIDIAN_VAULT_PATH", "")
+    if vault_path and Path(vault_path).exists():
+        reports = list(Path(vault_path, "Reports").glob("*.md"))
+        _print(f"  {GREEN}✓{RESET}  {GOLD}Vault{RESET:<18} {len(reports)} reports → {DIM}{vault_path}{RESET}")
+    else:
+        _print(f"  {RED}✗{RESET}  {GOLD}Vault{RESET:<18} {RED}NOT CONFIGURED — set OBSIDIAN_VAULT_PATH in .env{RESET}")
+        issues.append("Vault not configured")
+
+    # Warehouse
+    warehouse = Path(__file__).parent / "verdigris_warehouse.db"
+    if warehouse.exists():
+        import sqlite3 as _sq
+        try:
+            _conn = _sq.connect(warehouse)
+            _rows = _conn.execute("SELECT COUNT(*) FROM eia_rates").fetchone()[0]
+            _conn.close()
+            _print(f"  {GREEN}✓{RESET}  {GOLD}Warehouse{RESET:<18} {_rows:,} rows")
+        except Exception:
+            _print(f"  {RED}✗{RESET}  {GOLD}Warehouse{RESET:<18} {RED}Could not read — run data/seed_warehouse.py{RESET}")
+            issues.append("Warehouse unreadable")
+    else:
+        _print(f"  {RED}✗{RESET}  {GOLD}Warehouse{RESET:<18} {RED}NOT FOUND — run: python3 data/seed_warehouse.py{RESET}")
+        issues.append("Warehouse missing")
+
+    # API keys
+    keys = [
+        ("OpenRouter", "OPENROUTER_API_KEY", True),
+        ("EIA",        "EIA_API_KEY",        False),
+        ("NREL",       "NREL_API_KEY",        False),
+        ("Census",     "CENSUS_API_KEY",      False),
+    ]
+    for name, env_var, required in keys:
+        val = _os.getenv(env_var, "")
+        if val:
+            _print(f"  {GREEN}✓{RESET}  {GOLD}{name}{RESET:<18} configured")
+        elif required:
+            _print(f"  {RED}✗{RESET}  {GOLD}{name}{RESET:<18} {RED}MISSING — required{RESET}")
+            issues.append(f"{name} API key missing")
+        else:
+            _print(f"  {DIM}·{RESET}  {GOLD}{name}{RESET:<18} {DIM}not set — U.S. features limited{RESET}")
+
+    _print(f"  {GREEN}✓{RESET}  {GOLD}Eurostat{RESET:<18} {DIM}no key required{RESET}")
+    _print(f"  {GREEN}✓{RESET}  {GOLD}NASA POWER{RESET:<18} {DIM}no key required{RESET}")
+    _print(f"  {DIM}→{RESET}  Logs → {DIM}{_log_file}{RESET}")
+
+    if issues:
+        _print(f"\n  {RED}⚠ {len(issues)} issue(s) detected — some features may not work{RESET}")
+        for issue in issues:
+            _print(f"    {DIM}· {issue}{RESET}")
+    else:
+        _print(f"\n  {GREEN}✓ All systems ready{RESET}")
+
+    _print(f"\n  {TEAL}→{RESET}  Open {GOLD}http://localhost:8501{RESET} in your browser\n")
+
+if not st.session_state.get("_startup_done"):
+    _startup_check()
+    st.session_state["_startup_done"] = True
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -164,6 +254,7 @@ def init_state():
         "current_report":  None,
         "market_intel_result": None,
         "post_report_action": None,
+        "pending_location": "",
         "vault_filter":    "All",
         "selected_report": None,
     }
@@ -498,7 +589,7 @@ def run_full_report(location: str, report_type: str):
     from data.pvwatts import get_output as pvwatts_output
     from data.census import get_demographics
     from data.warehouse import get_country_profile
-    from data.intl_rates import get_intl_rate
+    from data.intl_rates import get_current_rate as get_intl_rate
     from agent.analyst import run
     from agent.report import write
 
@@ -735,10 +826,21 @@ def render_report_intake():
             )
             st.session_state.current_report = report_md
         else:
-            error_msg = st.session_state.get(
-                "_last_error",
-                "Report generation failed. Check your API keys and try again."
-            )
+            raw_error = st.session_state.get("_last_error", "")
+            if raw_error:
+                error_msg = raw_error
+            else:
+                error_msg = (
+                    "Report generation failed.\n\n"
+                    "**Common causes:**\n"
+                    "- Missing API key — check your `.env` file\n"
+                    "- Location not recognized — try a U.S. state "
+                    "name, ZIP code, or country\n"
+                    "- Network timeout — try again in a moment\n\n"
+                    f"Run `python3 cli.py status` to check "
+                    f"your configuration.\n\n"
+                    f"Error log: `logs/verdigris.log`"
+                )
             _add_message("assistant", error_msg, badge="report")
             st.session_state._last_error = ""
 
@@ -957,6 +1059,77 @@ def render_chat():
     """Conversational Q&A with vault context, inline analysis, and escalation."""
     _render_messages()
 
+    # Contextual action buttons
+    pending = st.session_state.get("pending_location", "")
+    if pending and st.session_state.messages:
+        last = st.session_state.messages[-1]
+        if last.get("role") == "assistant":
+            st.markdown(
+                "<div style='margin-top:8px;'></div>",
+                unsafe_allow_html=True
+            )
+            b1, b2, b3, b4 = st.columns([2, 2, 2, 1])
+            with b1:
+                if st.button(
+                    f"☀️ Solar viability — {pending}",
+                    key="ctx_solar",
+                    use_container_width=False
+                ):
+                    st.session_state.report_location = pending
+                    st.session_state.report_type = "solar_viability"
+                    st.session_state.pending_location = ""
+                    st.session_state.mode = "report_running"
+                    st.rerun()
+            with b2:
+                if st.button(
+                    f"🔬 Market intelligence — {pending}",
+                    key="ctx_intel",
+                    use_container_width=False
+                ):
+                    from models.clustering import (
+                        run_full_market_analysis,
+                        _load_vault_reports_direct
+                    )
+                    reports = _load_vault_reports_direct()
+                    result = run_full_market_analysis(
+                        pending, reports
+                    )
+                    if (isinstance(result, dict)
+                            and not result.get("target")):
+                        st.session_state.report_location = pending
+                        st.session_state.report_type = "solar_viability"
+                        st.session_state.post_report_action = "market_intel"
+                        st.session_state.mode = "report_running"
+                    else:
+                        st.session_state.market_intel_result = result
+                        st.session_state.mode = "market_intel_view"
+                    st.session_state.pending_location = ""
+                    st.rerun()
+            with b3:
+                if st.button(
+                    f"📈 Payback — {pending}",
+                    key="ctx_payback",
+                    use_container_width=False
+                ):
+                    from memory.search import _analysis_payback
+                    result = _analysis_payback(
+                        f"payback for {pending}"
+                    )
+                    _add_message(
+                        "assistant", result,
+                        badge="analysis"
+                    )
+                    st.session_state.pending_location = ""
+                    st.rerun()
+            with b4:
+                if st.button(
+                    "✕ dismiss",
+                    key="ctx_dismiss",
+                    use_container_width=False
+                ):
+                    st.session_state.pending_location = ""
+                    st.rerun()
+
     # Show selected report if user clicked one in sidebar
     if st.session_state.selected_report:
         r = st.session_state.selected_report
@@ -975,6 +1148,28 @@ def render_chat():
         st.session_state.last_input = user_input
         LOGGER.info("CHAT ── input: %s", user_input[:80])
         _add_message("user", user_input)
+
+        # Yes/confirmation detection for pending escalation
+        CONFIRM_WORDS = {
+            "yes", "sure", "do it", "run it", "go ahead",
+            "yes please", "please", "ok", "okay", "yep",
+            "yeah", "correct", "affirmative", "run report",
+        }
+        pending_loc = st.session_state.get(
+            "pending_location", ""
+        )
+        if (user_input.lower().strip() in CONFIRM_WORDS
+                and pending_loc):
+            _add_message("assistant",
+                f"Running solar viability report "
+                f"for {pending_loc}...",
+                badge="report"
+            )
+            st.session_state.report_location = pending_loc
+            st.session_state.report_type = "solar_viability"
+            st.session_state.pending_location = ""
+            st.session_state.mode = "report_running"
+            st.rerun()
 
         # Build history for chat()
         history = [
@@ -1005,11 +1200,56 @@ def render_chat():
             st.session_state.report_type = "solar_viability"
             st.session_state.mode = "report_running"
             st.rerun()
-
+        elif any(phrase in q_lower for phrase in {
+            "run a report", "run report", "generate report",
+            "solar viability for", "run solar", "analyze ",
+            "run a solar", "run demand", "run rate",
+            "executive summary for",
+        }):
+            from memory.search import (
+                _extract_escalation_params,
+                _extract_location_from_question,
+            )
+            esc_location, esc_type = _extract_escalation_params(
+                user_input
+            )
+            if not esc_location:
+                esc_location = _extract_location_from_question(
+                    user_input
+                )
+            if esc_location:
+                _add_message("assistant",
+                    f"Running {esc_type.replace('_',' ')} "
+                    f"report for {esc_location}...",
+                    badge="report"
+                )
+                st.session_state.report_location = esc_location
+                st.session_state.report_type = esc_type
+                st.session_state.mode = "report_running"
+                st.rerun()
+            else:
+                pass
         else:
             with st.spinner(""):
                 from memory.search import chat as vault_chat
                 response = vault_chat(user_input, history)
+
+            # Intercept escalation sentinel from chat router
+            if isinstance(response, str) and \
+                    response.startswith("__ESCALATE__:"):
+                parts = response.split(":", 2)
+                if len(parts) == 3:
+                    _, esc_location, esc_report_type = parts
+                    _add_message("assistant",
+                        f"Running {esc_report_type.replace('_',' ')} "
+                        f"report for {esc_location}...",
+                        badge="report"
+                    )
+                    st.session_state.report_location = esc_location
+                    st.session_state.report_type = esc_report_type
+                    st.session_state.mode = "report_running"
+                    st.rerun()
+                    return
 
             # Classify badge
             badge = "vault"
@@ -1025,6 +1265,32 @@ def render_chat():
                       "regression", "go no-go", "where else",
                       "comparable", "markets like", "what drives"}):
                 badge = "analysis"
+
+            # Store pending location for contextual buttons
+            # Only set if a real location is detected —
+            # not question words or generic terms
+            import re as _re2
+            _NOT_LOCATIONS = {
+                "what", "where", "when", "how", "why", "who",
+                "would", "could", "should", "will", "can", "may",
+                "please", "tell", "show", "give", "find", "run",
+                "the", "this", "that", "these", "those", "there",
+                "here", "some", "any", "all", "most", "many",
+                "solar", "viability", "payback", "report", "ask",
+                "market", "energy", "rate", "cost", "data", "vault",
+                "common", "trends", "seeing", "insights", "obvious",
+                "across", "knowledge", "base", "about", "with",
+            }
+            _all_matches = _re2.findall(
+                r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b',
+                user_input
+            )
+            _pending = ""
+            for _candidate in _all_matches:
+                if _candidate.lower() not in _NOT_LOCATIONS:
+                    _pending = _candidate
+                    break
+            st.session_state.pending_location = _pending
 
             _add_message("assistant", response, badge=badge)
             st.rerun()

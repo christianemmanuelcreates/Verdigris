@@ -194,7 +194,20 @@ def _is_escalation(q: str) -> bool:
 
 
 def _is_analysis(q: str) -> bool:
-    return any(kw in q for kw in ANALYSIS_KEYWORDS)
+    """
+    Requires analysis keywords to appear with location
+    context or explicit question words to avoid false
+    positives on general conversation.
+    """
+    if not any(kw in q for kw in ANALYSIS_KEYWORDS):
+        return False
+    # Must also contain a question signal or location signal
+    question_signals = {
+        "what", "how", "show", "calculate", "compute",
+        "tell me", "give me", "find", "run", "get",
+        "for ", "of ", "payback", "roi", "lcoe",
+    }
+    return any(sig in q for sig in question_signals)
 
 
 def _extract_escalation_params(question: str) -> tuple[str, str]:
@@ -541,34 +554,17 @@ def _analysis_market_ranking() -> str:
 # ── Escalation ────────────────────────────────────────────────────────────────
 
 def _execute_escalation(location: str, report_type: str) -> str:
-    """Triggers the full analyst → report → vault pipeline."""
+    """
+    Returns a sentinel string that app.py intercepts to trigger
+    the full report pipeline with visible thinking states.
+    Format: __ESCALATE__:location:report_type
+    """
     if not location:
         return (
             "To run a report, specify a location. "
             "Example: 'Run a solar viability report for Texas'"
         )
-
-    try:
-        from agent.analyst import run
-        from agent.report import write
-
-        findings = run(location, report_type)
-        if "error" in findings:
-            return f"Analysis failed for {location}: {findings['error']}"
-
-        report_md = write(findings, report_type)
-        headline = findings.get("headline", "")
-
-        return (
-            f"## Report complete — {location}\n\n"
-            f"**{headline}**\n\n"
-            f"{report_md[:800]}\n\n"
-            f"*Full report saved to Obsidian vault.*"
-        )
-
-    except Exception as exc:
-        LOGGER.error("Escalation failed for %s: %s", location, exc)
-        return f"Report generation failed for {location}: {exc}"
+    return f"__ESCALATE__:{location}:{report_type}"
 
 
 # ── LLM chat call ─────────────────────────────────────────────────────────────
@@ -709,23 +705,53 @@ def _extract_title(text: str, fallback: str) -> str:
 
 
 def _extract_location_from_question(question: str) -> str:
-    """Extracts a likely location name from a question."""
-    # Look for "for X" or "of X" patterns
+    """
+    Extracts a likely location name from a question.
+    Never returns common question/sentence words as locations.
+    """
+    # Words that are never locations
+    NOT_LOCATIONS = {
+        "what", "where", "when", "how", "why", "who",
+        "would", "could", "should", "will", "can", "may",
+        "please", "tell", "show", "give", "find", "run",
+        "the", "this", "that", "these", "those", "there",
+        "here", "some", "any", "all", "most", "many",
+        "like", "just", "also", "then", "than", "more",
+        "solar", "viability", "payback", "report", "analysis",
+        "market", "energy", "rate", "cost", "data", "vault",
+    }
+
+    # Look for "for X" pattern first — most reliable
     match = re.search(
-        r"\bfor\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", question
+        r"\bfor\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b",
+        question
     )
     if match:
-        return match.group(1)
+        loc = match.group(1)
+        if loc.lower() not in NOT_LOCATIONS:
+            return loc
+
+    # Look for "of X" pattern
     match = re.search(
-        r"\bof\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", question
+        r"\bof\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b",
+        question
     )
     if match:
-        return match.group(1)
-    # Fallback: first capitalized word
+        loc = match.group(1)
+        if loc.lower() not in NOT_LOCATIONS:
+            return loc
+
+    # Look for known state/country names explicitly
+    # Only match capitalized words not in exclusion list
     words = question.split()
     for w in words:
-        if w[0].isupper() and len(w) > 2:
-            return w.strip(",.?!")
+        clean = w.strip(",.\'\"")
+        if (len(clean) > 2
+                and clean[0].isupper()
+                and clean.lower() not in NOT_LOCATIONS
+                and not clean.isupper()):  # skip acronyms
+            return clean
+
     return ""
 
 

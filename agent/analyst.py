@@ -14,7 +14,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from data.location import resolve
 from data.nasa import get_irradiance
 from data.eia import get_rates
-from data.intl_rates import get_intl_rate
+from data.intl_rates import get_current_rate as get_intl_rate
 from data.pvwatts import get_output as pvwatts_output
 from data.census import get_demographics
 from data.warehouse import get_country_profile, get_schema_description, query
