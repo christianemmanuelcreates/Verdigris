@@ -1,16 +1,29 @@
-streamlit>=1.35.0
+# Verdigris — Runtime Dependencies
+# Python 3.11+ required
+# Tested with Python 3.13, numpy 2.4.4, streamlit 1.56.0
+
+# UI
+streamlit>=1.40.0
+
+# Data
 pandas>=2.0.0
-numpy>=1.26.0
-scikit-learn>=1.4.0
-plotly>=5.20.0
+numpy>=2.0.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+PyYAML>=6.0.0
+
+# ML
+scikit-learn>=1.4.0
+prophet>=1.1.5
+python-dateutil>=2.9.0
+
+# Visualization
+plotly>=5.20.0
+
+# LLM / API
+openai>=1.30.0
 pydantic>=2.0.0
 tenacity>=8.2.0
+
+# Geo
 pgeocode>=0.4.0
-prophet>=1.1.5
-openai>=1.30.0
-jupyter>=1.0.0
-notebook>=7.0.0
-ipykernel>=6.29.0
-openpyxl>=3.1.0

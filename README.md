@@ -59,7 +59,7 @@ English](docs/LLM_explanation_for_non_technical_reps.png)
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/yourusername/verdigris.git
+git clone https://github.com/christianemmanuelcreates/Verdigris.git
 cd verdigris
 
 # 2. Create and activate virtual environment
@@ -124,8 +124,8 @@ The demo vault ships with 32 pre-generated reports across three workflows:
 → K-Means: Cluster 3 (high-rate premium)
   Similar markets: Australia, Beverly Hills, California
   Regression: Rate explains 77% of viability variance
-  Decision tree: If payback ≤ 7.1yr → viable (100% confidence)
-  Opportunity score: #1 of 23 analyzed markets
+  LCOE: 6.2¢/kWh vs 30.3¢ grid — solar 79% cheaper
+  25yr NPV: $54,128 (8kW system after ITC)
 ```
 
 ### Narrative 2 — The Market Development Manager
@@ -181,8 +181,8 @@ Verdigris is built in seven layers. Each layer has a deliberate design rationale
 │  Tenacity retry · OpenRouter model abstraction               │
 ├─────────────────────────────────────────────────────────────┤
 │  ML Models — models/                                         │
-│  K-Means clustering · OLS regression · Decision tree         │
-│  Prophet demand forecast · Opportunity scoring               │
+│  K-Means clustering · OLS regression · LCOE analysis         │
+│  Prophet demand forecast · Rate trajectory                   │
 ├─────────────────────────────────────────────────────────────┤
 │  Data Connectors — data/                                     │
 │  NASA · EIA · NREL · Census · Eurostat · World Bank          │
@@ -275,8 +275,10 @@ If Anthropic raises prices, one line in `.env` switches the analyst to DeepSeek 
 ```
 verdigris/
 ├── app.py                      ← Streamlit UI entry point
+├── cli.py                      ← Terminal interface and system diagnostic
 ├── DEMO_SEED.py                ← Seeds 32-report demo vault
 ├── ROADMAP.md                  ← Build history and current status
+├── test_suite.py               ← Pre-push test suite (run before committing)
 │
 ├── config/
 │   ├── niche.md                ← Market benchmarks and averages
@@ -302,7 +304,7 @@ verdigris/
 │   ├── demand.py               ← Prophet demand forecasting
 │   ├── metrics.py              ← Model accuracy explanation
 │   └── clustering.py           ← K-Means · regression ·
-│                                  decision tree · opportunity score
+│                                  LCOE analysis · rate trajectory
 │
 ├── agent/
 │   ├── analyst.py              ← Data → Pydantic findings package
