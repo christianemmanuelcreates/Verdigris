@@ -281,8 +281,11 @@ def _fetch_data(location_obj: dict, report_type: str) -> dict:
                 kwh_pc = profile.get("kwh_per_capita") or 0
                 density_proxy = min(kwh_pc / 10, 5000)  # rough scaling
 
-                intl_rate = data["connectors"].get("intl_rate", {})
-                rate_val = intl_rate.get("rate_cents_kwh") or 0
+                intl_rate = data["connectors"].get("intl_rate", 0)
+                if isinstance(intl_rate, dict):
+                    rate_val = intl_rate.get("rate_cents_kwh") or 0
+                else:
+                    rate_val = intl_rate or 0
                 score_inputs = {
                     "irradiance": irr.get("annual_avg_kwh_m2_day", 0) or 0,
                     "rate": rate_val,
