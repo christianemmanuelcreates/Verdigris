@@ -719,7 +719,15 @@ def _extract_location_from_question(question: str) -> str:
         "like", "just", "also", "then", "than", "more",
         "solar", "viability", "payback", "report", "analysis",
         "market", "energy", "rate", "cost", "data", "vault",
+        "zipcode", "zip", "code", "location",
+        "area", "city", "state", "country", "region",
+        "place", "address", "number", "above", "below",
     }
+
+    # Check for ZIP code first — highest confidence
+    zip_match = re.search(r"\b(\d{5})\b", question)
+    if zip_match:
+        return zip_match.group(1)
 
     # Look for "for X" pattern first — most reliable
     match = re.search(

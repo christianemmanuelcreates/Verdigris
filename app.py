@@ -1292,6 +1292,8 @@ def render_chat():
                 "market", "energy", "rate", "cost", "data", "vault",
                 "common", "trends", "seeing", "insights", "obvious",
                 "across", "knowledge", "base", "about", "with",
+                "zipcode", "zip", "code", "location",
+                "area", "above", "below", "number", "place",
             }
             _all_matches = _re2.findall(
                 r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b',
