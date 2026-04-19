@@ -18,8 +18,8 @@ Public API:
     run_full_market_analysis(location)  → dict
     run_kmeans(fm)                      → KMeansResult
     run_regression(fm)                  → RegressionResult
-    run_decision_tree(fm)               → DecisionTreeResult
-    score_opportunity(fm)               → OpportunityResult
+    compute_lcoe_table(target_lf)       → LCOEResult
+    compute_rate_trajectory(location)   → RateTrajectoryResult
 """
 
 from __future__ import annotations
@@ -943,13 +943,7 @@ def run_full_market_analysis(
         and market count.
     """
     if vault_reports is None:
-        try:
-            import sys
-            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-            from app import get_vault_reports
-            vault_reports = get_vault_reports()
-        except Exception:
-            vault_reports = _load_vault_reports_direct()
+        vault_reports = _load_vault_reports_direct()
 
     if not vault_reports:
         return {

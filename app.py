@@ -35,6 +35,8 @@ LOGGER = logging.getLogger("verdigris")
 def _startup_check():
     """Runs once on app launch. Logs system status."""
     import sys as _sys
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
     def _print(msg=""):
         print(msg, file=_sys.stderr)
 
@@ -107,7 +109,7 @@ def _startup_check():
 
     _print(f"\n  {TEAL}→{RESET}  Open {GOLD}http://localhost:8501{RESET} in your browser\n")
 
-if not st.session_state.get("_startup_done"):
+if "_startup_done" not in st.session_state:
     _startup_check()
     st.session_state["_startup_done"] = True
 
@@ -257,6 +259,10 @@ def init_state():
         "pending_location": "",
         "vault_filter":    "All",
         "selected_report": None,
+        "_intake_processing": "",
+        "_last_error":        "",
+        "_vault_count":       0,
+        "sidebar_open":       False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -659,10 +665,16 @@ def run_full_report(location: str, report_type: str):
                 )
             st.write(f"💡 Fetching electricity rates...")
             rate = get_intl_rate(iso2)
-            if rate.get("rate_cents_kwh"):
+            if isinstance(rate, dict):
+                rate_display = rate.get("rate_cents_kwh", 0)
+                method = rate.get("method", "")
+            else:
+                rate_display = rate
+                method = "static reference"
+            if rate_display:
                 st.write(
-                    f"   → {rate['rate_cents_kwh']}¢/kWh "
-                    f"({rate.get('method','')})"
+                    f"   → {rate_display:.2f}¢/kWh "
+                    f"({method})"
                 )
 
         # Step 3 — Models + analyst LLM
@@ -1073,7 +1085,7 @@ def render_chat():
                 if st.button(
                     f"☀️ Solar viability — {pending}",
                     key="ctx_solar",
-                    use_container_width=False
+                    width='content'
                 ):
                     st.session_state.report_location = pending
                     st.session_state.report_type = "solar_viability"
@@ -1084,7 +1096,7 @@ def render_chat():
                 if st.button(
                     f"🔬 Market intelligence — {pending}",
                     key="ctx_intel",
-                    use_container_width=False
+                    width='content'
                 ):
                     from models.clustering import (
                         run_full_market_analysis,
@@ -1109,7 +1121,7 @@ def render_chat():
                 if st.button(
                     f"📈 Payback — {pending}",
                     key="ctx_payback",
-                    use_container_width=False
+                    width='content'
                 ):
                     from memory.search import _analysis_payback
                     result = _analysis_payback(
@@ -1125,7 +1137,7 @@ def render_chat():
                 if st.button(
                     "✕ dismiss",
                     key="ctx_dismiss",
-                    use_container_width=False
+                    width='content'
                 ):
                     st.session_state.pending_location = ""
                     st.rerun()

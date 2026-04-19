@@ -63,7 +63,11 @@ def cmd_status():
         print(f"  {t('✗', RED)}  {t('Vault', GOLD):<22} "
               f"{t('NOT CONFIGURED — set OBSIDIAN_VAULT_PATH in .env', RED)}")
 
-    warehouse = Path("verdigris_warehouse.db")
+    try:
+        from data.warehouse import WAREHOUSE_PATH
+        warehouse = WAREHOUSE_PATH
+    except ImportError:
+        warehouse = Path("verdigris_warehouse.db")
     if warehouse.exists():
         import sqlite3
         conn = sqlite3.connect(warehouse)
